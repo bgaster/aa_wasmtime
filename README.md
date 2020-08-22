@@ -1,6 +1,10 @@
 # About
 
-### [Project homepage](https://muses-dmi.github.io/projects/)
+This repo is part of a larger project called Audio Anywhere(AA). Audio Anywhere a 
+framework for work-ing with audio plugins that are compiled once and run anywhere.
+At the heart of Audio Anywhere is an audio engine whose Digital Signal Processing (DSP) components are written in Faust and deployed with WebAssembly. 
+
+Details about the project can be found on the [project's homepage](https://muses-dmi.github.io/projects/).
 
 ## Introduction
 
@@ -16,13 +20,15 @@ For an example of the interface in practice see the [Audio Anywhere standalone a
 Currently we only support Wasmtime, as Wasmer had some issues with 128-SIMD. At
 somepoint this needs to be generalized and a trait created that enables multiple implementations, or a feature based selection. 
 
-## Including
+## Usage
 
 Add the following line to your Cargo.toml:
 
 ```toml
 aa_wasmtime = { git = "https://github.com/bgaster/aa_wasmtime" }
 ```
+
+TODO: ADD EXAMPLE OF LOADING AND USING A MODULE
 
 ## Audio Anywhere WASM API
 
@@ -44,7 +50,7 @@ pub fn get_num_params_int() -> u32;
 pub fn get_num_params_bool() -> u32;
 ```
 
-While the following allow setting and getting. Each parameter type, e.g. ```float```, is in its own address space, thus indexed in the range  $\interval[open right]{0}{N}$, where N is the number of parameters in respective address space. 
+While the following allow setting and getting. Each parameter type, e.g. ```float```, is in its own address space, thus indexed in the range [0,N), where N is the number of parameters in the respective address space. 
 
 ```rust
 /// set float parameter 
