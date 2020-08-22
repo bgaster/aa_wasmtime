@@ -10,17 +10,6 @@ use anyhow::{anyhow, Result};
 
 //------------------------------------------------------------------------------
 
-/// symbol for input buffer 0 in WASM module
-const IN_BUFFER0: &str = "IN_BUFFER0";
-/// symbol for input buffer 1 in WASM module
-const IN_BUFFER1: &str = "IN_BUFFER1";
-/// symbol for output buffer 0 in WASM module
-const OUT_BUFFER0: &str = "OUT_BUFFER0";
-/// symbol for output buffer 1 in WASM module
-const OUT_BUFFER1: &str = "OUT_BUFFER1";
-
-//------------------------------------------------------------------------------
-
 /// Representation of an Audio Anywhere Module or Unit
 pub struct AAUnit {
     /// wasmtime instance for single module
@@ -70,13 +59,12 @@ pub struct AAUnit {
 }
 
 impl AAUnit {
-    pub fn new(
-        wasm_bytes: &[u8]) -> Result<Self> {
+    /// create an Audio Anywhere module
+    pub fn new(wasm_bytes: &[u8]) -> Result<Self> {
 
         let engine = Engine::new(Config::new().wasm_simd(true));
         let store = Store::new(&engine);
 
-        // add error handling
         let module = Module::new(store.engine(), wasm_bytes)?;
         let instance = Instance::new(&store, &module, &[])?;
         let init = instance
@@ -175,6 +163,7 @@ impl AAUnit {
     }
 
     /// initialize module
+    /// must be called for WASM AA Module to be correclty initialized
     #[inline]
     pub fn init(&mut self, sample_rate: f64) -> Result<()> {
         // first initialize WASM module
@@ -241,24 +230,28 @@ impl AAUnit {
         f(index, param).map_err(|_| anyhow!("WASM call set_param_int failed"))
     }
 
+    /// get a float parameter
     #[inline]
     pub fn get_param_float(&self, index: u32) -> Result<f32> {
         let f = self.get_param_float.get1::<u32, f32>()?;
         f(index).map_err(|_| anyhow!("WASM call get_param_float failed"))
     }
 
+    /// get an int parameter
     #[inline]
     pub fn get_param_int(&self, index: u32) -> Result<i32> {
         let f = self.get_param_int.get1::<u32, i32>()?;
         f(index).map_err(|_| anyhow!("WASM call get_param_int failed"))
     }
 
+    /// get number of audio input buffers
     #[inline]
     pub fn get_number_inputs(&self) -> Result<i32> {
         let f = self.get_num_inputs.get0::<i32>()?;
         f().map_err(|_| anyhow!("WASM call get_number_inputs failed"))
     }
 
+    /// get number of audio output buffers
     #[inline]
     pub fn get_number_outputs(&self) -> Result<i32> {
         let f = self.get_num_outputs.get0::<i32>()?;
