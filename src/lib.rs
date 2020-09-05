@@ -241,60 +241,73 @@ impl AAUnit {
         Ok(())
     }
 
-    /// send note on message
+    // TOTHINK: we could optimize this by allowing the module.json define the nodes
+    // to send note messages too
+
+    /// send note on message to all nodes in the graph 
     #[inline]
     pub fn handle_note_on(&self, note: i32, velocity: f32) -> Result<()> {
-        let f = self.aaunits[0].handle_note_on.get2::<i32, f32, ()>()?;
-        f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_on failed"))
+        for n in self.aaunits.iter() {
+            let f = n.handle_note_on.get2::<i32, f32, ()>()?;
+            f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_on failed"))?
+        }
+        Ok(())        
     }
 
-    /// send note off message
+    /// send note off message to all nodes in the graph
     #[inline]
     pub fn handle_note_off(&self, note: i32, velocity: f32) -> Result<()> {
-        let f = self.aaunits[0].handle_note_off.get2::<i32, f32, ()>()?;
-        f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_off failed"))
+        for n in self.aaunits.iter() {
+            let f = n.handle_note_off.get2::<i32, f32, ()>()?;
+            f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_off failed"))?
+        }
+        Ok(())
     }
 
-    // get number of voices
-    #[inline]
-    pub fn get_voices(&self) -> Result<i32> {
-        let f = self.aaunits[0].get_voices.get0::<i32>()?;
-        f().map_err(|_| anyhow!("WASM call get_voices failed"))
-    }
+    // get number of voices (hmm, this needs some work for graphs)
+    // #[inline]
+    // pub fn get_voices(&self) -> Result<i32> {
+    //     let f = self.aaunits[0].get_voices.get0::<i32>()?;
+    //     f().map_err(|_| anyhow!("WASM call get_voices failed"))
+    // }
 
     #[inline]
-    pub fn get_param_index(&self, _name: &str) -> Result<i32> {
-        let f = self.aaunits[0].get_param_index.get1::<i32,i32>()?;
+    pub fn get_param_index(&self, node: u32, _name: &str) -> Result<i32> {
+        let f = self.aaunits[node as usize].get_param_index.get1::<i32,i32>()?;
         f(0).map_err(|_| anyhow!("WASM call get_param_index failed"))
     }
 
-    /// set a float parameter
+    /// set a float parameter for a node in the graph
     #[inline]
-    pub fn set_param_float(&self, index: u32, param: f32) -> Result<()> {
-        let f = self.aaunits[0].set_param_float.get2::<u32, f32, ()>()?;
+    pub fn set_param_float(&self, node: u32, index: u32, param: f32) -> Result<()> {
+        let f = self.aaunits[node as usize].set_param_float.get2::<u32, f32, ()>()?;
         f(index, param).map_err(|_| anyhow!("WASM call set_param_float failed"))
     }
 
-    /// set an int parameter
+    /// set an int parameter for a node in the graph
     #[inline]
-    pub fn set_param_int(&self, index: u32, param: i32) -> Result<()> {
-        let f = self.aaunits[0].set_param_int.get2::<u32, i32, ()>()?;
+    pub fn set_param_int(&self, node: u32, index: u32, param: i32) -> Result<()> {
+        let f = self.aaunits[node as usize].set_param_int.get2::<u32, i32, ()>()?;
         f(index, param).map_err(|_| anyhow!("WASM call set_param_int failed"))
     }
 
-    /// get a float parameter
+    /// get a float parameter for a node in the graph
     #[inline]
-    pub fn get_param_float(&self, index: u32) -> Result<f32> {
-        let f = self.aaunits[0].get_param_float.get1::<u32, f32>()?;
+    pub fn get_param_float(&self, node: u32, index: u32) -> Result<f32> {
+        let f = self.aaunits[node as usize].get_param_float.get1::<u32, f32>()?;
         f(index).map_err(|_| anyhow!("WASM call get_param_float failed"))
     }
 
-    /// get an int parameter
+    /// get an int parameter for a node in the graph
     #[inline]
-    pub fn get_param_int(&self, index: u32) -> Result<i32> {
-        let f = self.aaunits[0].get_param_int.get1::<u32, i32>()?;
+    pub fn get_param_int(&self, node: u32, index: u32) -> Result<i32> {
+        let f = self.aaunits[node as usize].get_param_int.get1::<u32, i32>()?;
         f(index).map_err(|_| anyhow!("WASM call get_param_int failed"))
     }
+
+    // number of inputs and outputs for graph
+    // inputs is the number of inputs of first level in graph
+    // outputs is the number of outputs of the last level in graph
 
     /// get number of audio input buffers
     #[inline]
@@ -306,7 +319,7 @@ impl AAUnit {
     /// get number of audio output buffers
     #[inline]
     pub fn get_number_outputs(&self) -> Result<i32> {
-        let f = self.aaunits[0].get_num_outputs.get0::<i32>()?;
+        let f = self.aaunits[self.aaunits.len()-1].get_num_outputs.get0::<i32>()?;
         f().map_err(|_| anyhow!("WASM call get_number_outputs failed"))
     }
 
