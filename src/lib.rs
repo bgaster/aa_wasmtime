@@ -106,7 +106,7 @@ impl AAUnit {
         //aaunits.push(Self::create_aaunit("", &instance)?);
         // now push sequenced nodes
         for i in 0..wasm_bytes.len() {
-            let module = Module::new(store.engine(), &wasm_bytes[0][..])?;
+            let module = Module::new(store.engine(), &wasm_bytes[i][..])?;
             let instance = Instance::new(&store, &module, &[])?;
             // handle to Wasm linear memory
             let memory = instance
@@ -216,27 +216,30 @@ impl AAUnit {
     /// must be called for WASM AA Module to be correclty initialized
     #[inline]
     pub fn init(&mut self, sample_rate: f64) -> Result<()> {
-        // first initialize WASM module
-        let f = self.aaunits[0].init.get1::<f64, ()>()?;
-        f(sample_rate)?;
 
-        // now setup buffers
+        for u in self.aaunits.iter_mut() {
+            // first initialize WASM module
+            let f = u.init.get1::<f64, ()>()?;
+            f(sample_rate)?;
 
-        // determine number of inputs
-        let number_inputs = self.aaunits[0].get_num_inputs.get0::<i32>()?()?;
-        let number_outputs = self.aaunits[0].get_num_outputs.get0::<i32>()?()?;
-        
-        // configure inputs
-        for i in 0..number_inputs {
-            let v = self.aaunits[0].get_input.get1::<i32,i32>()?(i as i32)? as usize;
-            self.aaunits[0].input_offsets.push(v);
-        }
-        
-        // configure outputs
-        for i in 0..number_outputs {
-            let v = self.aaunits[0].get_output.get1::<i32,i32>()?(i as i32)? as usize;
-            self.aaunits[0].output_offsets.push(v);
-        }
+             // now setup buffers
+
+            // determine number of inputs
+            let number_inputs = u.get_num_inputs.get0::<i32>()?()?;
+            let number_outputs = u.get_num_outputs.get0::<i32>()?()?;
+            
+            // configure inputs
+            for i in 0..number_inputs {
+                let v = u.get_input.get1::<i32,i32>()?(i as i32)? as usize;
+                u.input_offsets.push(v);
+            }
+            
+            // configure outputs
+            for i in 0..number_outputs {
+                let v = u.get_output.get1::<i32,i32>()?(i as i32)? as usize;
+                u.output_offsets.push(v);
+            }
+        }   
 
         Ok(())
     }
@@ -517,20 +520,59 @@ impl AAUnit {
     /// assume that output channels are interlaced
     #[inline]
     pub fn compute_zero_two(&self, frames: usize, outputs: &mut [f32]) -> Result<()> {
-    
         // now call compute
         let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
 
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
         let outputs0 = outputs[0..2 * frames as usize].iter_mut();
         let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
             let bytes0 = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
+                &self.aaunits[last]
+                    .memory
+                    .data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[last].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
+                &self.aaunits[last]
+                    .memory
+                    .data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[last].output_offsets[1] + 
                                               (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
