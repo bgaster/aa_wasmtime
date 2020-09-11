@@ -10,13 +10,12 @@ use anyhow::{anyhow, Result};
 
 //------------------------------------------------------------------------------
 
+const MODULE_PREFIX: &'static str = "instance";
+
+//------------------------------------------------------------------------------
+
 /// Representation of an Audio Anywhere Module or Unit
-pub struct AAUnit {
-    /// wasmtime instance for single module
-    #[allow(dead_code)]
-    instance: Instance,
-    /// wasmtime memory segment
-    memory: Memory,
+pub struct AAUnitIndividual {
     /// module init function
     init: Func,
 
@@ -56,77 +55,139 @@ pub struct AAUnit {
     input_offsets: Vec<usize>,
     /// output buffer offsets
     output_offsets: Vec<usize>,
+
+    /// TODO: remove once Wasmtime supports shared memories!
+    memory: Memory,
+
+    /// wasmtime instance for single module
+    #[allow(dead_code)]
+    instance: Instance,
+}
+
+/// Representation of an Audio Anywhere Module or Unit
+pub struct AAUnit {
+    
+    // /// wasmtime memory segment
+    // memory: Memory,
+
+    aaunits: Vec<AAUnitIndividual>,
 }
 
 impl AAUnit {
     /// create an Audio Anywhere module
-    pub fn new(wasm_bytes: &[u8]) -> Result<Self> {
+    pub fn new(wasm_bytes: Vec<Vec<u8>>) -> Result<Self> {
+        // fail if there are no wasm sources to link
+        if wasm_bytes.len() == 0 {
+            return Err(anyhow!("No AA Wasm modules"))
+        }
 
         let engine = Engine::new(Config::new().wasm_simd(true));
         let store = Store::new(&engine);
 
-        let module = Module::new(store.engine(), wasm_bytes)?;
-        let instance = Instance::new(&store, &module, &[])?;
-        let init = instance
-                    .get_func("init")
-                    .ok_or(anyhow!("WASM lacked init function"))?;
-        let handle_note_on = instance
-                                .get_func("handle_note_on")
-                                .ok_or(anyhow!("WASM lacked handle_note_on function"))?;
-        let handle_note_off = instance
-                                .get_func("handle_note_off")
-                                .ok_or(anyhow!("WASM lacked handle_note_off function"))?;
-        let get_input = instance
-                            .get_func("get_input")
-                            .ok_or(anyhow!("WASM lacked get_input function"))?;
-        let get_output = instance
-                            .get_func("get_output")
-                            .ok_or(anyhow!("WASM lacked get_output function"))?;
-        let set_input = instance
-                            .get_func("set_input")
-                            .ok_or(anyhow!("WASM lacked set_input function"))?;
-        let set_output = instance
-                            .get_func("set_output")
-                            .ok_or(anyhow!("WASM lacked set_output function"))?;
-        let get_voices = instance
-                            .get_func("get_voices")
-                            .ok_or(anyhow!("WASM lacked get_voices function"))?;
-        let get_param_index = instance
-                            .get_func("get_param_index")
-                            .ok_or(anyhow!("WASM lacked get_param_index function"))?;
-        let get_sample_rate: Func = instance
-                                        .get_func("get_sample_rate")
-                                        .ok_or(anyhow!("WASM lacked get_sample_rate function"))?;
-        let get_num_inputs: Func = instance
-                                    .get_func("get_num_input_channels")
-                                    .ok_or(anyhow!("WASM lacked get_num_input_channels function"))?;
-        let get_num_outputs: Func = instance
-                                        .get_func("get_num_output_channels")
-                                        .ok_or(anyhow!("WASM lacked get_num_output_channels function"))?;
-        let set_param_float: Func = instance
-                                        .get_func("set_param_float")
-                                        .ok_or(anyhow!("WASM lacked set_param_float function"))?;
-        let set_param_int: Func = instance
-                                        .get_func("set_param_int")
-                                        .ok_or(anyhow!("WASM lacked set_param_int function"))?;
-        let get_param_float: Func = instance
-                                        .get_func("get_param_float")
-                                        .ok_or(anyhow!("WASM lacked get_param_float function"))?;
-        let get_param_int: Func = instance
-                                        .get_func("get_param_int")
-                                        .ok_or(anyhow!("WASM lacked get_param_int function"))?;
-        let compute = instance
-                        .get_func("compute")
-                        .ok_or(anyhow!("WASM lacked compute function"))?;
+        // let mut linker = Linker::new(&store);
+        // linker.allow_shadowing(true);
+        // // add all but module 0 to the linker, ready for linking with module 0
+        // for i in 1..wasm_bytes.len() {
+        //     let module = Module::new(store.engine(), &wasm_bytes[i][..])?;
+        //     let module_name = [MODULE_PREFIX, &i.to_string()].join("_");
+        //     linker.module(&module_name, &module)?;
+        // }
+        
+        // // now link with module 0
+        // let module = Module::new(store.engine(), &wasm_bytes[0][..])?;
+        // let instance = linker.instantiate(&module)?;
+        // println!("printing names:");
+        // for e in instance.exports() {
+        //     println!("name: {}", e.name());
+        // }
 
-        // handle to WASM linear memory
-        let memory = instance
+        let mut aaunits = Vec::new();
+        // push start of graph
+        //aaunits.push(Self::create_aaunit("", &instance)?);
+        // now push sequenced nodes
+        for i in 0..wasm_bytes.len() {
+            let module = Module::new(store.engine(), &wasm_bytes[i][..])?;
+            let instance = Instance::new(&store, &module, &[])?;
+            // handle to Wasm linear memory
+            let memory = instance
                         .get_memory("memory")
                         .ok_or(anyhow!("WASM memory failed"))?;
 
+            aaunits.push(Self::create_aaunit("", instance, memory)?);
+        }
+
         Ok(Self {
-            instance,
-            memory,
+            aaunits,
+        })
+    }
+
+    /// get offest for symbol in Wasm linear memory, if not defined returns 0
+    /// of course, in theory 0 is a valid offset, so it is important to check this elsewhere
+    fn get_global_symbol_offset(symbol: &str, instance: &Instance) -> usize {
+        instance.get_global(symbol).map_or(0, |offset| {
+            if let Val::I32(o) = offset.get() {
+                o as usize
+            }
+            else {
+                0
+            }
+        })
+    }
+
+    fn create_aaunit(prefix: &str, instance: Instance, memory: Memory) -> Result<AAUnitIndividual> {
+        let init = instance
+            .get_func(&[prefix, "init"].join(""))
+            .ok_or(anyhow!("WASM lacked init function"))?;
+        let handle_note_on = instance
+            .get_func(&[prefix, "handle_note_on"].join(""))
+            .ok_or(anyhow!("WASM lacked handle_note_on function"))?;
+        let handle_note_off = instance
+            .get_func(&[prefix, "handle_note_off"].join(""))
+            .ok_or(anyhow!("WASM lacked handle_note_off function"))?;
+        let get_input = instance
+            .get_func(&[prefix, "get_input"].join(""))
+            .ok_or(anyhow!("WASM lacked get_input function"))?;
+        let get_output = instance
+            .get_func(&[prefix,"get_output"].join(""))
+            .ok_or(anyhow!("WASM lacked get_output function"))?;
+        let set_input = instance
+            .get_func(&[prefix,"set_input"].join(""))
+            .ok_or(anyhow!("WASM lacked set_input function"))?;
+        let set_output = instance
+            .get_func(&[prefix,"set_output"].join(""))
+            .ok_or(anyhow!("WASM lacked set_output function"))?;
+        let get_voices = instance
+            .get_func(&[prefix,"get_voices"].join(""))
+            .ok_or(anyhow!("WASM lacked get_voices function"))?;
+        let get_param_index = instance
+            .get_func(&[prefix,"get_param_index"].join(""))
+            .ok_or(anyhow!("WASM lacked get_param_index function"))?;
+        let get_sample_rate: Func = instance
+            .get_func(&[prefix,"get_sample_rate"].join(""))
+            .ok_or(anyhow!("WASM lacked get_sample_rate function"))?;
+        let get_num_inputs: Func = instance
+            .get_func(&[prefix,"get_num_input_channels"].join(""))
+            .ok_or(anyhow!("WASM lacked get_num_input_channels function"))?;
+        let get_num_outputs: Func = instance
+            .get_func(&[prefix,"get_num_output_channels"].join(""))
+            .ok_or(anyhow!("WASM lacked get_num_output_channels function"))?;
+        let set_param_float: Func = instance
+            .get_func(&[prefix,"set_param_float"].join(""))
+            .ok_or(anyhow!("WASM lacked set_param_float function"))?;
+        let set_param_int: Func = instance
+            .get_func(&[prefix,"set_param_int"].join(""))
+            .ok_or(anyhow!("WASM lacked set_param_int function"))?;
+        let get_param_float: Func = instance
+            .get_func(&[prefix,"get_param_float"].join(""))
+            .ok_or(anyhow!("WASM lacked get_param_float function"))?;
+        let get_param_int: Func = instance
+            .get_func(&[prefix,"get_param_int"].join(""))
+            .ok_or(anyhow!("WASM lacked get_param_int function"))?;
+        let compute = instance
+            .get_func(&[prefix,"compute"].join(""))
+            .ok_or(anyhow!("WASM lacked compute function"))?;
+
+        Ok(AAUnitIndividual {
             init,
             handle_note_on,
             handle_note_off,
@@ -146,19 +207,8 @@ impl AAUnit {
             compute,
             input_offsets: Vec::new(),
             output_offsets: Vec::new(),
-        })
-    }
-
-    /// get offest for symbol in WASM linear memory, if not defined returns 0
-    /// of course, in theory 0 is a valid offset, so it is important to check this elsewhere
-    fn get_global_symbol_offset(symbol: &str, instance: &Instance) -> usize {
-        instance.get_global(symbol).map_or(0, |offset| {
-            if let Val::I32(o) = offset.get() {
-                o as usize
-            }
-            else {
-                0
-            }
+            memory,
+            instance,
         })
     }
 
@@ -166,95 +216,113 @@ impl AAUnit {
     /// must be called for WASM AA Module to be correclty initialized
     #[inline]
     pub fn init(&mut self, sample_rate: f64) -> Result<()> {
-        // first initialize WASM module
-        let f = self.init.get1::<f64, ()>()?;
-        f(sample_rate)?;
 
-        // now setup buffers
+        for u in self.aaunits.iter_mut() {
+            // first initialize WASM module
+            let f = u.init.get1::<f64, ()>()?;
+            f(sample_rate)?;
 
-        // determine number of inputs
-        let number_inputs = self.get_num_inputs.get0::<i32>()?()?;
-        let number_outputs = self.get_num_outputs.get0::<i32>()?()?;
-        
-        // configure inputs
-        for i in 0..number_inputs {
-            self.input_offsets.push(self.get_input.get1::<i32,i32>()?(i as i32)? as usize);
-        }
-        
-        // configure outputs
-        for i in 0..number_outputs {
-            self.output_offsets.push(self.get_output.get1::<i32,i32>()?(i as i32)? as usize);
-        }
+             // now setup buffers
+
+            // determine number of inputs
+            let number_inputs = u.get_num_inputs.get0::<i32>()?()?;
+            let number_outputs = u.get_num_outputs.get0::<i32>()?()?;
+            
+            // configure inputs
+            for i in 0..number_inputs {
+                let v = u.get_input.get1::<i32,i32>()?(i as i32)? as usize;
+                u.input_offsets.push(v);
+            }
+            
+            // configure outputs
+            for i in 0..number_outputs {
+                let v = u.get_output.get1::<i32,i32>()?(i as i32)? as usize;
+                u.output_offsets.push(v);
+            }
+        }   
 
         Ok(())
     }
 
-    /// send note on message
+    // TOTHINK: we could optimize this by allowing the module.json define the nodes
+    // to send note messages too
+
+    /// send note on message to all nodes in the graph 
     #[inline]
     pub fn handle_note_on(&self, note: i32, velocity: f32) -> Result<()> {
-        let f = self.handle_note_on.get2::<i32, f32, ()>()?;
-        f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_on failed"))
+        for n in self.aaunits.iter() {
+            let f = n.handle_note_on.get2::<i32, f32, ()>()?;
+            f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_on failed"))?
+        }
+        Ok(())        
     }
 
-    /// send note off message
+    /// send note off message to all nodes in the graph
     #[inline]
     pub fn handle_note_off(&self, note: i32, velocity: f32) -> Result<()> {
-        let f = self.handle_note_off.get2::<i32, f32, ()>()?;
-        f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_off failed"))
+        for n in self.aaunits.iter() {
+            let f = n.handle_note_off.get2::<i32, f32, ()>()?;
+            f(note, velocity).map_err(|_| anyhow!("WASM call handle_note_off failed"))?
+        }
+        Ok(())
     }
 
-    // get number of voices
-    #[inline]
-    pub fn get_voices(&self) -> Result<i32> {
-        let f = self.get_voices.get0::<i32>()?;
-        f().map_err(|_| anyhow!("WASM call get_voices failed"))
-    }
+    // get number of voices (hmm, this needs some work for graphs)
+    // #[inline]
+    // pub fn get_voices(&self) -> Result<i32> {
+    //     let f = self.aaunits[0].get_voices.get0::<i32>()?;
+    //     f().map_err(|_| anyhow!("WASM call get_voices failed"))
+    // }
 
     #[inline]
-    pub fn get_param_index(&self, _name: &str) -> Result<i32> {
-        let f = self.get_param_index.get1::<i32,i32>()?;
+    pub fn get_param_index(&self, node: u32, _name: &str) -> Result<i32> {
+        let f = self.aaunits[node as usize].get_param_index.get1::<i32,i32>()?;
         f(0).map_err(|_| anyhow!("WASM call get_param_index failed"))
     }
 
-    /// set a float parameter
+    /// set a float parameter for a node in the graph
     #[inline]
-    pub fn set_param_float(&self, index: u32, param: f32) -> Result<()> {
-        let f = self.set_param_float.get2::<u32, f32, ()>()?;
+    pub fn set_param_float(&self, node: u32, index: u32, param: f32) -> Result<()> {
+        let f = self.aaunits[node as usize].set_param_float.get2::<u32, f32, ()>()?;
         f(index, param).map_err(|_| anyhow!("WASM call set_param_float failed"))
     }
 
-    /// set an int parameter
+    /// set an int parameter for a node in the graph
     #[inline]
-    pub fn set_param_int(&self, index: u32, param: i32) -> Result<()> {
-        let f = self.set_param_int.get2::<u32, i32, ()>()?;
+    pub fn set_param_int(&self, node: u32, index: u32, param: i32) -> Result<()> {
+        let f = self.aaunits[node as usize].set_param_int.get2::<u32, i32, ()>()?;
         f(index, param).map_err(|_| anyhow!("WASM call set_param_int failed"))
     }
 
-    /// get a float parameter
+    /// get a float parameter for a node in the graph
     #[inline]
-    pub fn get_param_float(&self, index: u32) -> Result<f32> {
-        let f = self.get_param_float.get1::<u32, f32>()?;
+    pub fn get_param_float(&self, node: u32, index: u32) -> Result<f32> {
+        let f = self.aaunits[node as usize].get_param_float.get1::<u32, f32>()?;
         f(index).map_err(|_| anyhow!("WASM call get_param_float failed"))
     }
 
-    /// get an int parameter
+    /// get an int parameter for a node in the graph
     #[inline]
-    pub fn get_param_int(&self, index: u32) -> Result<i32> {
-        let f = self.get_param_int.get1::<u32, i32>()?;
+    pub fn get_param_int(&self, node: u32, index: u32) -> Result<i32> {
+        let f = self.aaunits[node as usize].get_param_int.get1::<u32, i32>()?;
         f(index).map_err(|_| anyhow!("WASM call get_param_int failed"))
     }
+
+    // number of inputs and outputs for graph
+    // inputs is the number of inputs of first level in graph
+    // outputs is the number of outputs of the last level in graph
 
     /// get number of audio input buffers
     #[inline]
     pub fn get_number_inputs(&self) -> Result<i32> {
-        let f = self.get_num_inputs.get0::<i32>()?;
+        let f = self.aaunits[0].get_num_inputs.get0::<i32>()?;
         f().map_err(|_| anyhow!("WASM call get_number_inputs failed"))
     }
 
     /// get number of audio output buffers
     #[inline]
     pub fn get_number_outputs(&self) -> Result<i32> {
-        let f = self.get_num_outputs.get0::<i32>()?;
+        let f = self.aaunits[self.aaunits.len()-1].get_num_outputs.get0::<i32>()?;
         f().map_err(|_| anyhow!("WASM call get_number_outputs failed"))
     }
 
@@ -265,7 +333,7 @@ impl AAUnit {
         let inputs0 = inputs[0..frames as usize].iter();
         let wasm_inputs0: &mut [f32] = unsafe { 
             let bytes = 
-                &mut self.memory.data_unchecked_mut()[self.input_offsets[0]..self.input_offsets[0] 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[0]..self.aaunits[0].input_offsets[0] 
                                                       + (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
@@ -276,14 +344,50 @@ impl AAUnit {
         }
 
         // now call compute
-        let compute = self.compute.get1::<u32, ()>()?;
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                        (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                        (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
 
         // setup and copy audio out of WASM
         let outputs0 = outputs[0..frames as usize].iter_mut();
         let wasm_outputs0: &[f32] = unsafe { 
             let bytes = 
-                &self.memory.data_unchecked()[self.output_offsets[0]..self.output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
@@ -304,7 +408,7 @@ impl AAUnit {
         let inputs0 = inputs[0..frames as usize].iter();
         let wasm_inputs0: &mut [f32] = unsafe { 
             let bytes = 
-                &mut self.memory.data_unchecked_mut()[self.input_offsets[0]..self.input_offsets[0] 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[0]..self.aaunits[0].input_offsets[0] 
                                                       + (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
@@ -315,18 +419,55 @@ impl AAUnit {
         }
 
         // now call compute
-        let compute = self.compute.get1::<u32, ()>()?;
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
 
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
         let outputs0 = outputs[0..2 * frames as usize].iter_mut();
         let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
             let bytes0 = 
-                &self.memory.data_unchecked()[self.output_offsets[0]..self.output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &self.memory.data_unchecked()[self.output_offsets[1]..self.output_offsets[1] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
                                               (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -352,10 +493,10 @@ impl AAUnit {
         let inputs0 = inputs[0..frames as usize].iter();
         let (wasm_inputs0, wasm_inputs1): (&mut [f32],&mut [f32]) = unsafe { 
             let bytes0 = 
-                &mut self.memory.data_unchecked_mut()[self.input_offsets[0]..self.input_offsets[0] 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[0]..self.aaunits[0].input_offsets[0] 
                                                       + (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &mut self.memory.data_unchecked_mut()[self.input_offsets[1]..self.input_offsets[1] 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[1]..self.aaunits[0].input_offsets[1] 
                                                       + (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -371,14 +512,50 @@ impl AAUnit {
         }
 
         // now call compute
-        let compute = self.compute.get1::<u32, ()>()?;
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
 
         // setup and copy audio out of WASM
         let outputs0 = outputs[0..frames as usize].iter_mut();
         let wasm_outputs0: &[f32] = unsafe { 
             let bytes = 
-                &self.memory.data_unchecked()[self.output_offsets[0]..self.output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
@@ -399,10 +576,10 @@ impl AAUnit {
         let inputs0 = inputs[0..frames as usize].iter();
         let (wasm_inputs0, wasm_inputs1): (&mut [f32],&mut [f32]) = unsafe { 
             let bytes0 = 
-                &mut self.memory.data_unchecked_mut()[self.input_offsets[0]..self.input_offsets[0] 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[0]..self.aaunits[0].input_offsets[0] 
                                                       + (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &mut self.memory.data_unchecked_mut()[self.input_offsets[1]..self.input_offsets[1] 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[1]..self.aaunits[0].input_offsets[1] 
                                                       + (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -418,18 +595,53 @@ impl AAUnit {
         }
 
         // now call compute
-        let compute = self.compute.get1::<u32, ()>()?;
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                    (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                    (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+        let last = self.aaunits.len() - 1 ;
 
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
         let outputs0 = outputs[0..2 * frames as usize].iter_mut();
         let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
             let bytes0 = 
-                &self.memory.data_unchecked()[self.output_offsets[0]..self.output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &self.memory.data_unchecked()[self.output_offsets[1]..self.output_offsets[1] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
                                               (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -452,20 +664,59 @@ impl AAUnit {
     /// assume that output channels are interlaced
     #[inline]
     pub fn compute_zero_two(&self, frames: usize, outputs: &mut [f32]) -> Result<()> {
-    
         // now call compute
-        let compute = self.compute.get1::<u32, ()>()?;
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
 
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
         let outputs0 = outputs[0..2 * frames as usize].iter_mut();
         let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
             let bytes0 = 
-                &self.memory.data_unchecked()[self.output_offsets[0]..self.output_offsets[0] + 
+                &self.aaunits[last]
+                    .memory
+                    .data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[last].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &self.memory.data_unchecked()[self.output_offsets[1]..self.output_offsets[1] + 
+                &self.aaunits[last]
+                    .memory
+                    .data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[last].output_offsets[1] + 
                                               (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -488,14 +739,50 @@ impl AAUnit {
     #[inline]
     pub fn compute_zero_one(&self, frames: usize, outputs: &mut [f32]) -> Result<()> {
         // now call compute
-        let compute = self.compute.get1::<u32, ()>()?;
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
 
         // setup and copy audio out of WASM
         let outputs0 = outputs[0..frames as usize].iter_mut();
         let wasm_outputs0: &[f32] = unsafe { 
             let bytes = 
-                &self.memory.data_unchecked()[self.output_offsets[0]..self.output_offsets[0] 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] 
                                               + (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
