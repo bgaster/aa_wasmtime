@@ -347,11 +347,47 @@ impl AAUnit {
         let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
 
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                        (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                        (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
         // setup and copy audio out of WASM
         let outputs0 = outputs[0..frames as usize].iter_mut();
         let wasm_outputs0: &[f32] = unsafe { 
             let bytes = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
@@ -386,15 +422,52 @@ impl AAUnit {
         let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
 
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
+
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
         let outputs0 = outputs[0..2 * frames as usize].iter_mut();
         let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
             let bytes0 = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
                                               (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -442,11 +515,47 @@ impl AAUnit {
         let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
 
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
         // setup and copy audio out of WASM
         let outputs0 = outputs[0..frames as usize].iter_mut();
         let wasm_outputs0: &[f32] = unsafe { 
             let bytes = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
@@ -489,15 +598,50 @@ impl AAUnit {
         let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
 
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                    (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                    (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+        let last = self.aaunits.len() - 1 ;
+
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
         let outputs0 = outputs[0..2 * frames as usize].iter_mut();
         let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
             let bytes0 = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
                                               (frames*std::mem::size_of::<f32>())];
             let bytes1 = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
                                               (frames*std::mem::size_of::<f32>())];
             (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
         };
@@ -598,11 +742,47 @@ impl AAUnit {
         let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
         compute(frames as u32)?;
 
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
         // setup and copy audio out of WASM
         let outputs0 = outputs[0..frames as usize].iter_mut();
         let wasm_outputs0: &[f32] = unsafe { 
             let bytes = 
-                &self.aaunits[0].memory.data_unchecked()[self.aaunits[0].output_offsets[0]..self.aaunits[0].output_offsets[0] 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] 
                                               + (frames*std::mem::size_of::<f32>())];
             std::mem::transmute(bytes)
         };
