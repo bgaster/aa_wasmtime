@@ -485,6 +485,98 @@ impl AAUnit {
         Ok(())
     }
 
+    /// compute audio for 1 input and 2 outputs channels
+    /// assume that output channels are interlaced
+    #[inline]
+    pub fn compute_one_two_non(&self, frames: usize, inputs: &[f32], outputs: &mut [&mut [f32];2]) -> Result<()> {
+        // setup and copy input audio
+        let inputs0 = inputs[0..frames as usize].iter();
+        let wasm_inputs0: &mut [f32] = unsafe { 
+            let bytes = 
+                &mut self.aaunits[0].memory.data_unchecked_mut()[self.aaunits[0].input_offsets[0]..self.aaunits[0].input_offsets[0] 
+                                                      + (frames*std::mem::size_of::<f32>())];
+            std::mem::transmute(bytes)
+        };
+
+        let zipped_inputs = inputs0.zip(wasm_inputs0);
+        for (input, wasm_input) in zipped_inputs {
+            *wasm_input = *input;
+        }
+
+        // now call compute
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
+        compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
+
+        // setup and copy audio out of WASM
+        // output is assumed to be interlaced
+        let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
+            let bytes0 = 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[0].output_offsets[0] + 
+                                              (frames*std::mem::size_of::<f32>())];
+            let bytes1 = 
+                &self.aaunits[last].memory.data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[0].output_offsets[1] + 
+                                              (frames*std::mem::size_of::<f32>())];
+            (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+        };
+
+        let [outputs0, outputs1] = outputs;
+        let (outputs0, outputs1) = {
+			let outputs0 = outputs0[..frames as usize].iter_mut();
+			let outputs1 = outputs1[..frames as usize].iter_mut();
+			(outputs0, outputs1)
+		};
+
+        let zipper_outputs = outputs0.zip(wasm_outputs0);
+        for (output, wasm_output) in zipper_outputs {
+            *output = *wasm_output;
+        }
+
+        let zipper_outputs = outputs1.zip(wasm_outputs1);
+        for (output, wasm_output) in zipper_outputs {
+            *output = *wasm_output;
+        }
+
+        Ok(())
+    }
+
+
     /// compute audio for 1 input and 1 output channels
     #[inline]
     pub fn compute_two_one(&self, frames: usize, inputs: &[f32], outputs: &mut [f32]) -> Result<()> {
