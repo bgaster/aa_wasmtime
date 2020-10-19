@@ -10,7 +10,7 @@ use anyhow::{anyhow, Result};
 
 //------------------------------------------------------------------------------
 
-const MODULE_PREFIX: &'static str = "instance";
+//pub const MODULE_PREFIX: &'static str = "instance";
 
 //------------------------------------------------------------------------------
 
@@ -112,7 +112,6 @@ impl AAUnit {
             let memory = instance
                         .get_memory("memory")
                         .ok_or(anyhow!("WASM memory failed"))?;
-
             aaunits.push(Self::create_aaunit("", instance, memory)?);
         }
 
@@ -728,6 +727,86 @@ impl AAUnit {
             .flat_map(|(x, y)| iter::once(x).chain(iter::once(y))); 
 
         let zipper_outputs = outputs0.zip(collected_wasm_outputs);
+        for (output, wasm_output) in zipper_outputs {
+            *output = *wasm_output;
+        }
+
+        Ok(())
+    }
+
+/// compute audio for 1 input and 2 outputs channels
+    /// assume that output channels are NOT interlaced
+    #[inline]
+    pub fn compute_zero_two_non(&self, frames: usize, outputs: &mut [&mut [f32];2]) -> Result<()> {
+        // now call compute
+        let compute = self.aaunits[0].compute.get1::<u32, ()>()?;
+        compute(frames as u32)?;
+
+        // process all remaining nodes.. outputs not yet visible to the outside world
+        for i in 1..self.aaunits.len() {
+            for oi in 0..self.aaunits[i-1].output_offsets.len() {
+                let (output, input): (&[f32],&mut [f32]) = unsafe { 
+                    let bytes0 = 
+                        &self.aaunits[i-1]
+                            .memory
+                            .data_unchecked()[self.aaunits[i-1].output_offsets[oi]..self.aaunits[i-1].output_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+                    let bytes1 = 
+                        &mut self.aaunits[i]
+                            .memory
+                            .data_unchecked_mut()[self.aaunits[i].input_offsets[oi]..self.aaunits[i].input_offsets[oi] + 
+                                                      (frames*std::mem::size_of::<f32>())];
+
+                    (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+                };
+
+                // copy outputs of previous node to inputs of current node
+                let zipper = input.iter_mut().zip(output);
+                for (i,o) in zipper {
+                    *i = *o;
+                }
+
+                // now run current node
+                let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
+                compute(frames as u32)?;
+            }
+
+            
+        }
+
+        // finally copy outputs to the outside world
+
+        let last = self.aaunits.len() - 1 ;
+
+        // setup and copy audio out of WASM
+        // output is assumed to be non interlaced
+        let (wasm_outputs0, wasm_outputs1): (&[f32],&[f32]) = unsafe { 
+            let bytes0 = 
+                &self.aaunits[last]
+                    .memory
+                    .data_unchecked()[self.aaunits[last].output_offsets[0]..self.aaunits[last].output_offsets[0] + 
+                                              (frames*std::mem::size_of::<f32>())];
+            let bytes1 = 
+                &self.aaunits[last]
+                    .memory
+                    .data_unchecked()[self.aaunits[last].output_offsets[1]..self.aaunits[last].output_offsets[1] + 
+                                              (frames*std::mem::size_of::<f32>())];
+            (std::mem::transmute(bytes0), std::mem::transmute(bytes1))
+        };
+
+        let [outputs0, outputs1] = outputs;
+        let (outputs0, outputs1) = {
+			let outputs0 = outputs0[..frames as usize].iter_mut();
+			let outputs1 = outputs1[..frames as usize].iter_mut();
+			(outputs0, outputs1)
+		};
+
+        let zipper_outputs = outputs0.zip(wasm_outputs0);
+        for (output, wasm_output) in zipper_outputs {
+            *output = *wasm_output;
+        }
+
+        let zipper_outputs = outputs1.zip(wasm_outputs1);
         for (output, wasm_output) in zipper_outputs {
             *output = *wasm_output;
         }
