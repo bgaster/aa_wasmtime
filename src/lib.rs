@@ -398,7 +398,7 @@ impl AAUnit {
 
         Ok(())
     }
-
+    
     /// compute audio for 1 input and 2 outputs channels
     /// assume that output channels are interlaced
     #[inline]
@@ -535,14 +535,11 @@ impl AAUnit {
                 let compute = self.aaunits[i].compute.get1::<u32, ()>()?;
                 compute(frames as u32)?;
             }
-
-            
         }
 
         // finally copy outputs to the outside world
 
         let last = self.aaunits.len() - 1 ;
-
 
         // setup and copy audio out of WASM
         // output is assumed to be interlaced
@@ -658,7 +655,7 @@ impl AAUnit {
 
         Ok(())
     }
-
+    
     /// compute audio for 2 input and 2 outputs channels
     /// assume that output channels are interlaced
     #[inline]
