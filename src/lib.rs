@@ -100,6 +100,10 @@ impl AAUnit {
         // for e in instance.exports() {
         //     println!("name: {}", e.name());
         // }
+        // let print = Func::wrap(&store, || {
+        //     println!("print");
+        // });
+        // let imports = [print.into()];
 
         let mut aaunits = Vec::new();
         // push start of graph
